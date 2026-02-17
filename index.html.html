@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>TaxiChile Pro</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&display=swap');
+        body { font-family: 'Inter', sans-serif; background-color: #f8fafc; margin: 0; padding: 0; }
+        .gradient-bg { background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%); }
+        #map { height: 300px; width: 100%; border-radius: 1.5rem; z-index: 1; }
+        .taxi-anim { display: inline-block; animation: taxiBounce 1.2s infinite; font-size: 2rem; }
+        @keyframes taxiBounce { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-5px); } }
+        .suggestions-container { position: absolute; z-index: 1000; background: white; width: 100%; max-height: 200px; overflow-y: auto; border-radius: 1rem; box-shadow: 0 10px 15px -3px rgba(0,0,0,0.1); }
+        .suggestion-item { padding: 12px; border-bottom: 1px solid #f1f5f9; font-size: 14px; }
+        .result-card { background: #0f172a; color: white; border-radius: 2rem; display: none; }
+        .result-card.show { display: block; }
+    </style>
+</head>
+<body>
+    <div class="min-h-screen flex flex-col">
+        <header class="gradient-bg text-white p-6 shadow-xl">
+            <div class="flex flex-col items-center gap-3">
+                <span class="taxi-anim text-3xl">🚕</span>
+                <h1 class="text-2xl font-black tracking-tighter text-center">TAXICHILE <span class="text-yellow-400">PRO</span></h1>
+                <p id="app-tagline" class="text-[10px] uppercase tracking-widest text-center opacity-70">Calcula, convierte y viaja seguro.</p>
+                
+                <div class="flex gap-2 mt-2">
+                    <button onclick="changeLanguage('es')" id="btn-es" class="px-4 py-2 rounded-lg text-xs font-bold bg-yellow-400 text-slate-900">ESP</button>
+                    <button onclick="changeLanguage('en')" id="btn-en" class="px-4 py-2 rounded-lg text-xs font-bold text-white border border-white/20">ENG</button>
+                </div>
+            </div>
+        </header>
+
+        <main class="p-4 space-y-4">
+            <div class="bg-white rounded-[2rem] p-6 shadow-lg border border-slate-100">
+                <div class="space-y-4">
+                    <div>
+                        <label id="label-origin" class="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Origen</label>
+                        <div class="flex gap-2">
+                            <input type="text" id="origin" readonly class="flex-1 px-4 py-3 bg-slate-100 rounded-xl text-sm" placeholder="Toca el GPS">
+                            <button onclick="getCurrentLocation()" class="bg-slate-900 text-white p-3 rounded-xl shadow-lg">🎯</button>
+                        </div>
+                    </div>
+
+                    <div class="relative">
+                        <label id="label-dest" class="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Destino</label>
+                        <input type="text" id="destination" autocomplete="off" class="w-full px-4 py-3 border border-slate-200 rounded-xl text-sm font-bold shadow-sm" placeholder="¿A dónde vas?">
+                        <div id="suggestions" class="suggestions-container hidden border"></div>
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-3">
+                        <div>
+                            <label id="label-rate" class="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Tarifa p/km</label>
+                            <input type="number" id="tarifa" value="650" class="w-full px-4 py-3 bg-slate-100 rounded-xl font-bold text-sm">
+                        </div>
+                        <div>
+                            <label id="label-curr" class="text-[10px] font-bold text-slate-400 uppercase mb-1 block">Moneda</label>
+                            <select id="currency" onchange="updateAllPrices()" class="w-full px-4 py-3 bg-slate-900 text-white rounded-xl text-xs font-bold">
+                                <option value="CLP">🇨🇱 CLP</option>
+                                <option value="USD">🇺🇸 USD</option>
+                                <option value="EUR">🇪🇺 EUR</option>
+                                <option value="BRL">🇧🇷 BRL</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div id="resultCard" class="result-card p-6 mx-4 shadow-xl">
+                <div class="text-center space-y-2">
+                    <p id="label-cost" class="text-[10px] text-slate-400 uppercase font-bold">Costo Estimado</p>
+                    <h2 class="text-4xl font-black" id="mainPrice">$0</h2>
+                    <div class="inline-block bg-yellow-400 text-slate-900 px-3 py-1 rounded-full text-xs font-black" id="secondaryPrice">0.00 USD</div>
+                    <div class="flex justify-around pt-4 border-t border-white/10 mt-4">
+                        <div class="text-center"><p id="label-dist" class="text-[8px] uppercase opacity-50">Distancia</p><p class="font-bold" id="distance">0 km</p></div>
+                        <div class="text-center"><p id="label-time" class="text-[8px] uppercase opacity-50">Tiempo</p><p class="font-bold" id="duration">0 min</p></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="px-4 pb-10">
+                <div id="map"></div>
+            </div>
+        </main>
+    </div>
+
+    <script>
+        let map, originMarker, destinationMarker, routeLine, userLocation, lastDistance, rates = {};
+        let currentLang = 'es';
+
+        const texts = {
+            es: { tagline: "Calcula, convierte y viaja seguro.", origin: "Origen", dest: "Destino", rate: "Tarifa p/km", curr: "Moneda", cost: "Costo Estimado", dist: "Distancia", time: "Tiempo", ok: "GPS Listo", wait: "Esperando GPS" },
+            en: { tagline: "Calculate, convert and travel safe.", origin: "Start", dest: "Destination", rate: "Rate p/km", curr: "Currency", cost: "Estimated Cost", dist: "Distance", time: "Time", ok: "GPS Active", wait: "Waiting GPS" }
+        };
+
+        function changeLanguage(lang) {
+            currentLang = lang;
+            document.getElementById('btn-es').className = `px-4 py-2 rounded-lg text-xs font-bold transition-all ${lang === 'es' ? 'bg-yellow-400 text-slate-900' : 'text-white border border-white/20'}`;
+            document.getElementById('btn-en').className = `px-4 py-2 rounded-lg text-xs font-bold transition-all ${lang === 'en' ? 'bg-yellow-400 text-slate-900' : 'text-white border border-white/20'}`;
+            document.getElementById('app-tagline').textContent = texts[lang].tagline;
+            document.getElementById('label-origin').textContent = texts[lang].origin;
+            document.getElementById('label-dest').textContent = texts[lang].dest;
+            document.getElementById('label-rate').textContent = texts[lang].rate;
+            document.getElementById('label-curr').textContent = texts[lang].curr;
+            document.getElementById('label-cost').textContent = texts[lang].cost;
+            document.getElementById('label-dist').textContent = texts[lang].dist;
+            document.getElementById('label-time').textContent = texts[lang].time;
+            updateAllPrices();
+        }
+
+        function initMap() {
+            map = L.map('map', { zoomControl: false }).setView([-33.44, -70.66], 12);
+            L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png').addTo(map);
+            fetchRates();
+        }
+
+        async function fetchRates() {
+            try { const r = await fetch('https://open.er-api.com/v6/latest/CLP'); const d = await r.json(); rates = d.rates; } catch(e){}
+        }
+
+        function getCurrentLocation() {
+            navigator.geolocation.getCurrentPosition(pos => {
+                userLocation = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+                map.setView([userLocation.lat, userLocation.lng], 15);
+                if (originMarker) map.removeLayer(originMarker);
+                originMarker = L.marker([userLocation.lat, userLocation.lng]).addTo(map);
+                fetch(`https://nominatim.openstreetmap.org/reverse?format=json&lat=${userLocation.lat}&lon=${userLocation.lng}&addressdetails=1`)
+                    .then(r => r.json()).then(d => {
+                        const a = d.address;
+                        document.getElementById('origin').value = `${a.road || ''} ${a.house_number || ''}`.trim() || d.display_name.split(',')[0];
+                    });
+            }, (err) => alert("Activa el GPS y usa HTTPS"), { enableHighAccuracy: true });
+        }
+
+        const destInput = document.getElementById('destination');
+        const suggestBox = document.getElementById('suggestions');
+
+        destInput.addEventListener('input', () => {
+            if (destInput.value.length < 3) return suggestBox.classList.add('hidden');
+            fetch(`https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(destInput.value)}&countrycodes=cl&limit=5`)
+                .then(r => r.json()).then(data => {
+                    suggestBox.innerHTML = '';
+                    data.forEach(p => {
+                        const d = document.createElement('div');
+                        d.className = 'suggestion-item';
+                        d.textContent = p.display_name.split(',').slice(0,2).join(',');
+                        d.onclick = () => { destInput.value = p.display_name; suggestBox.classList.add('hidden'); calculateRoute(p.lat, p.lon); };
+                        suggestBox.appendChild(d);
+                    });
+                    suggestBox.classList.remove('hidden');
+                });
+        });
+
+        async function calculateRoute(lat, lng) {
+            if (!userLocation) return alert("GPS?");
+            const r = await fetch(`https://router.project-osrm.org/route/v1/driving/${userLocation.lng},${userLocation.lat};${lng},${lat}?overview=full&geometries=geojson`);
+            const d = await r.json();
+            if (d.code === 'Ok') {
+                const rt = d.routes[0];
+                if (routeLine) map.removeLayer(routeLine);
+                routeLine = L.geoJSON(rt.geometry, { style: { color: '#fbbf24', weight: 5 } }).addTo(map);
+                map.fitBounds(routeLine.getBounds());
+                lastDistance = rt.distance / 1000;
+                document.getElementById('distance').textContent = lastDistance.toFixed(1) + ' km';
+                document.getElementById('duration').textContent = Math.round(rt.duration/60) + ' min';
+                document.getElementById('resultCard').classList.add('show');
+                updateAllPrices();
+            }
+        }
+
+        function updateAllPrices() {
+            if (!lastDistance) return;
+            const p = Math.round(lastDistance * document.getElementById('tarifa').value);
+            const c = document.getElementById('currency').value;
+            document.getElementById('mainPrice').textContent = `$${p.toLocaleString('es-CL')}`;
+            document.getElementById('secondaryPrice').textContent = c === 'CLP' ? 'LOCAL' : `${(p * (rates[c]||0)).toFixed(2)} ${c}`;
+        }
+
+        window.onload = initMap;
+    </script>
+</body>
+</html>
